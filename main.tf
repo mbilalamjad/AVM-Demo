@@ -24,13 +24,12 @@ resource "random_integer" "zone_index" {
   min = 1
 }
 
-/*
 module "get_valid_sku_for_deployment_region" {
-  source = "../../modules/sku_selector"
+  source = "./.terraform/modules/sku_selector"
 
   deployment_region = module.regions.regions[random_integer.region_index.result].name
 }
-*/
+
 
 resource "azurerm_resource_group" "this_rg" {
   location = module.regions.regions[random_integer.region_index.result].name
@@ -127,7 +126,8 @@ module "testvm" {
   resource_group_name = azurerm_resource_group.this_rg.name
   os_type             = "Linux"
   name                = module.naming.virtual_machine.name_unique
-  sku_size            = "Standard_DS1_v2"
+  sku_size            = module.get_valid_sku_for_deployment_region.sku
+  #sku_size            = "Standard_DS1_v2"
   zone                = random_integer.zone_index.result
 
   generated_secrets_key_vault_secret_config = {
