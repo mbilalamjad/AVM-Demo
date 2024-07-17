@@ -10,7 +10,7 @@ module "regions" {
 
 locals {
   tags = {
-    scenario = "common_centos_with_plaintext_password"
+    scenario = "Default"
   }
 }
 
@@ -24,17 +24,20 @@ resource "random_integer" "zone_index" {
   min = 1
 }
 
+/*
 module "get_valid_sku_for_deployment_region" {
   source = "../../modules/sku_selector"
 
   deployment_region = module.regions.regions[random_integer.region_index.result].name
 }
+*/
 
 resource "azurerm_resource_group" "this_rg" {
   location = module.regions.regions[random_integer.region_index.result].name
   name     = module.naming.resource_group.name_unique
   tags     = local.tags
 }
+
 resource "azurerm_virtual_network" "this_vnet" {
   address_space       = ["10.0.0.0/16"]
   location            = azurerm_resource_group.this_rg.location
@@ -89,38 +92,22 @@ resource "azurerm_bastion_host" "bastion" {
 
 data "azurerm_client_config" "current" {}
 
-resource "random_password" "admin_password" {
-  length           = 22
-  min_lower        = 2
-  min_numeric      = 2
-  min_special      = 2
-  min_upper        = 2
-  override_special = "!#$%&()*+,-./:;<=>?@[]^_{|}~"
-  special          = true
-}
-
 module "avm_res_keyvault_vault" {
-  source                      = "Azure/avm-res-keyvault-vault/azurerm"
-  version                     = "=0.7.1"
-  tenant_id                   = data.azurerm_client_config.current.tenant_id
-  name                        = module.naming.key_vault.name_unique
-  resource_group_name         = azurerm_resource_group.this_rg.name
-  location                    = azurerm_resource_group.this_rg.location
-  enabled_for_disk_encryption = true
+  source              = "Azure/avm-res-keyvault-vault/azurerm"
+  version             = "=0.7.1"
+  tenant_id           = data.azurerm_client_config.current.tenant_id
+  name                = module.naming.key_vault.name_unique
+  resource_group_name = azurerm_resource_group.this_rg.name
+  location            = azurerm_resource_group.this_rg.location
   network_acls = {
     default_action = "Allow"
-    bypass         = "AzureServices"
   }
 
   role_assignments = {
-    deployment_user_secrets = { #give the deployment user access to secrets
+    deployment_user_secrets = {
       role_definition_id_or_name = "Key Vault Secrets Officer"
       principal_id               = data.azurerm_client_config.current.object_id
     }
-  }
-
-  wait_for_rbac_before_key_operations = {
-    create = "60s"
   }
 
   wait_for_rbac_before_secret_operations = {
@@ -128,44 +115,31 @@ module "avm_res_keyvault_vault" {
   }
 
   tags = local.tags
-
-  secrets = {
-    admin_password = {
-      name = "admin-password"
-    }
-  }
-
-  secrets_value = {
-    admin_password = random_password.admin_password.result
-  }
-}
-
-resource "azurerm_orchestrated_virtual_machine_scale_set" "this" {
-  location                    = azurerm_resource_group.this_rg.location
-  name                        = module.naming.virtual_machine_scale_set.name_unique
-  platform_fault_domain_count = 1
-  resource_group_name         = azurerm_resource_group.this_rg.name
-  zones                       = ["1", "2", "3"]
 }
 
 module "testvm" {
-  source = "../../"
-  #source = "Azure/avm-res-compute-virtualmachine/azurerm"
-  #version = "0.13.0"
+  #source = "../../"
+  source = "Azure/avm-res-compute-virtualmachine/azurerm"
+  version = "0.15.1"
 
-  admin_username                        = "azureuser"
-  admin_password                        = random_password.admin_password.result
-  disable_password_authentication       = false
-  enable_telemetry                      = var.enable_telemetry
-  encryption_at_host_enabled            = true
-  generate_admin_password_or_ssh_key    = false
-  location                              = azurerm_resource_group.this_rg.location
-  name                                  = module.naming.virtual_machine.name_unique
-  resource_group_name                   = azurerm_resource_group.this_rg.name
-  os_type                               = "Linux"
-  sku_size                              = module.get_valid_sku_for_deployment_region.sku
-  virtual_machine_scale_set_resource_id = azurerm_orchestrated_virtual_machine_scale_set.this.id
-  zone                                  = random_integer.zone_index.result
+  enable_telemetry    = var.enable_telemetry
+  location            = azurerm_resource_group.this_rg.location
+  resource_group_name = azurerm_resource_group.this_rg.name
+  os_type             = "Linux"
+  name                = module.naming.virtual_machine.name_unique
+  sku_size            = "Standard_DS1_v2"
+  zone                = random_integer.zone_index.result
+
+  generated_secrets_key_vault_secret_config = {
+    key_vault_resource_id = module.avm_res_keyvault_vault.resource_id
+  }
+
+  source_image_reference = {
+    publisher = "Canonical"
+    offer     = "0001-com-ubuntu-server-focal"
+    sku       = "20_04-lts-gen2"
+    version   = "latest"
+  }
 
   network_interfaces = {
     network_interface_1 = {
@@ -179,71 +153,9 @@ module "testvm" {
     }
   }
 
-  os_disk = {
-    caching              = "ReadWrite"
-    storage_account_type = "Premium_LRS"
-  }
-
-  source_image_reference = {
-    publisher = "Canonical"
-    offer     = "0001-com-ubuntu-server-focal"
-    sku       = "20_04-lts-gen2"
-    version   = "latest"
-  }
-
   tags = local.tags
 
   depends_on = [
-    azurerm_orchestrated_virtual_machine_scale_set.this
-  ]
-}
-
-module "testvm2" {
-  source = "../../"
-  #source = "Azure/avm-res-compute-virtualmachine/azurerm"
-  #version = "0.15.1"
-
-  admin_username                        = "azureuser"
-  admin_password                        = random_password.admin_password.result
-  disable_password_authentication       = false
-  enable_telemetry                      = var.enable_telemetry
-  encryption_at_host_enabled            = true
-  generate_admin_password_or_ssh_key    = false
-  location                              = azurerm_resource_group.this_rg.location
-  name                                  = "${module.naming.virtual_machine.name_unique}-01"
-  resource_group_name                   = azurerm_resource_group.this_rg.name
-  os_type                               = "Linux"
-  sku_size                              = module.get_valid_sku_for_deployment_region.sku
-  virtual_machine_scale_set_resource_id = azurerm_orchestrated_virtual_machine_scale_set.this.id
-  zone                                  = random_integer.zone_index.result
-
-  network_interfaces = {
-    network_interface_1 = {
-      name = "${module.naming.network_interface.name_unique}-01"
-      ip_configurations = {
-        ip_configuration_1 = {
-          name                          = "${module.naming.network_interface.name_unique}-01-ipconfig1"
-          private_ip_subnet_resource_id = azurerm_subnet.this_subnet_1.id
-        }
-      }
-    }
-  }
-
-  os_disk = {
-    caching              = "ReadWrite"
-    storage_account_type = "Premium_LRS"
-  }
-
-  source_image_reference = {
-    publisher = "Canonical"
-    offer     = "0001-com-ubuntu-server-focal"
-    sku       = "20_04-lts-gen2"
-    version   = "latest"
-  }
-
-  tags = local.tags
-
-  depends_on = [
-    azurerm_orchestrated_virtual_machine_scale_set.this
+    module.avm_res_keyvault_vault
   ]
 }
